@@ -1,28 +1,37 @@
 # OpencodeIAGeneratorCasosUsosJiraXray
 
-Orquestador de IA con Opencode para generar, revisar y cargar casos de prueba funcionales en Xray/Jira, partiendo de tickets y requisitos.  
-El proyecto organiza un flujo guiado por prompts para:
+Orquestador de IA con OpenCode para certificar funcionalidades y automatizar el flujo completo de QA funcional con Jira + Xray + GitHub + Postman, desde el análisis de una tarjeta hasta la creación/asociación de casos de prueba.
 
-1. Analizar el ticket/requisito.
-2. Diseñar casos de prueba candidatos.
-3. Revisar cobertura y calidad.
-4. Preparar salida compatible con Xray.
-5. Cargar/importar los casos en Xray.
+> Este README está diseñado para que cualquier persona entienda el proyecto sin tener que volver a preguntar.
 
 ---
 
-## Objetivo del proyecto
+## 1) ¿Qué hace este proyecto?
 
-Este repositorio centraliza un flujo de QA asistido por IA para reducir trabajo manual en la creación de casos de prueba y mejorar consistencia en certificación funcional.
+Implementa un flujo QA estructurado en 4 etapas:
 
-Está pensado para equipos que usan:
-- **Jira** para gestión de requerimientos/incidencias.
-- **Xray** para gestión de casos de prueba.
-- **Opencode** como motor/orquestador de prompts y habilidades.
+1. **analyze-ticket** → analiza tarjeta Jira + rama GitHub + documentación Confluence + colecciones Postman.
+2. **review-coverage** → revisa cobertura existente en Xray y detecta brechas.
+3. **design-cases** → diseña casos nuevos con formato estricto (BACK / FRONT / BACK+FRONT).
+4. **load-xray** → crea casos en Xray, transiciona estado en Jira y los asocia al requerimiento.
+
+Todo esto está gobernado por reglas compartidas (`shared-rules.md`) y por un orquestador principal (`qa-xray-certification.md`).
 
 ---
 
-## Estructura del repositorio
+## 2) Arquitectura general
+
+- **Orquestador principal**: `gentle-orchestrator` (OpenCode)
+- **Subagente funcional**: `qa-xray-certification`
+- **Servidor MCP custom**: `src/index.ts` (xray-mcp)
+- **Skills declaradas**: `skills/qa-xray-certification/*.md`
+- **Configuración runtime**: `opencode.json`, `tui.json`
+
+El orquestador **no ejecuta pasos inline**: delega al subagente QA, que sigue el flujo duro en orden.
+
+---
+
+## 3) Estructura del repositorio y explicación archivo por archivo
 
 ```text
 .
@@ -46,148 +55,378 @@ Está pensado para equipos que usan:
         └── shared-rules.md
 ```
 
----
+### Archivos raíz
 
-## Explicación archivo por archivo
+#### `AGENTS.md`
+Define reglas globales de comportamiento del agente:
+- estilo de trabajo,
+- políticas de seguridad,
+- manejo de credenciales,
+- estándar QA funcional,
+- protocolo obligatorio para delegar al skill `qa-xray-certification`.
 
-## 1) Archivos raíz
+También declara lineamientos críticos, por ejemplo:
+- no exponer tokens/secrets,
+- no usar shell/curl para APIs cuando haya cliente nativo,
+- suprimir outputs técnicos sensibles al usuario.
 
-### `AGENTS.md`
-Documento de configuración/instrucciones para agentes o comportamiento de ejecución (convenciones, pautas del asistente, reglas operativas).  
-Sirve como referencia de cómo debe comportarse la IA dentro del flujo del repositorio.
+#### `LICENSE`
+Licencia MIT del proyecto.
 
-### `LICENSE`
-Licencia del proyecto (**MIT**).  
-Define permisos de uso, copia, modificación y distribución del código.
+#### `README.md`
+Documentación principal del repositorio (este archivo).
 
-### `README.md`
-Documentación principal del proyecto (este archivo).
+#### `opencode.json`
+Archivo más importante de configuración del runtime OpenCode. Contiene:
+- agentes (`gentle-orchestrator`, `qa-xray-certification`, agentes SDD),
+- permisos por tarea,
+- herramientas habilitadas por agente,
+- registro de MCPs (jira, github, postman, xray, context7, engram),
+- reglas de permisos de lectura/escritura.
 
-### `opencode.json`
-Archivo principal de configuración de Opencode.  
-Aquí normalmente se define:
-- Skills disponibles.
-- Flujo o wiring entre prompts/habilidades.
-- Parámetros de ejecución/contexto.
+#### `opencode.jsonc`
+Versión JSONC mínima de soporte/configuración.
 
-Es el núcleo de configuración para que el orquestador sepa cómo ejecutar el proceso de generación de casos.
+#### `package.json`
+Metadatos del paquete Node/TypeScript.
 
-### `opencode.jsonc`
-Variante JSON con comentarios (JSONC), usada como apoyo de configuración/documentación breve del setup de Opencode.
+#### `package-lock.json`
+Lock de dependencias para reproducibilidad.
 
-### `package.json`
-Metadatos y dependencias del proyecto Node.js (nombre, versión, scripts, etc.).  
-Aunque es mínimo, identifica el proyecto como paquete JavaScript/TypeScript.
+#### `tui.json`
+Configuración de experiencia TUI/CLI del entorno.
 
-### `package-lock.json`
-Lockfile de npm que fija versiones exactas de dependencias para garantizar instalaciones reproducibles.
+### Código fuente
 
-### `tui.json`
-Configuración asociada a interfaz textual (TUI) o personalización de experiencia en consola para ejecución/interacción del flujo.
+#### `src/index.ts`
+Implementa el **servidor MCP `xray-mcp`** usando `@modelcontextprotocol/sdk`.
 
----
+Responsabilidades principales:
+1. Autenticarse contra Xray (`/authenticate`) y cachear token.
+2. Exponer herramientas MCP para buscar/crear/asociar tests y transicionar issues.
+3. Integrar Jira REST API para transitions, issueLink y usuario actual.
+4. Convertir descripciones a formato ADF de Jira (`toADF`).
+5. Resolver `lineaDesarrollo` (mapa nombre→id) antes de persistir custom fields.
+6. Ofrecer tools compuestas optimizadas:
+   - `analyze_ticket_context` (búsquedas paralelas)
+   - `create_and_load_test` (crear + transiciones + asociación)
 
-## 2) Código fuente
+### Skills QA
 
-### `src/index.ts`
-Punto de entrada principal del proyecto en TypeScript.  
-Este archivo normalmente concentra la lógica de arranque/orquestación, por ejemplo:
-- Inicializar contexto del flujo.
-- Ejecutar secuencia de habilidades (análisis → diseño → revisión → carga).
-- Gestionar inputs/outputs y control de errores.
-- Coordinar configuración cargada desde `opencode.json`.
+#### `skills/qa-xray-certification/qa-xray-certification.md`
+Skill orquestador del flujo completo.
+- Define **hard gate**: `analyze-ticket → review-coverage → design-cases → load-xray`.
+- Prohíbe saltar pasos y ejecutar en paralelo.
+- Define comandos operativos (`/qa-xray-certification`, `/analyze-ticket`, etc.).
 
-En resumen, es el “director” técnico que conecta todas las piezas del pipeline.
+#### `skills/qa-xray-certification/shared-rules.md`
+Reglas transversales obligatorias:
+- formato de naming de casos (`DYF_Validar ...`),
+- estructura de `steps[]` (action/data/result),
+- reglas de precondiciones,
+- clasificación de tipo de caso (BACK/FRONT/BACK+FRONT),
+- formato exacto de pasos por tipo,
+- tabla de herramientas MCP permitidas/prohibidas.
 
----
+#### `skills/qa-xray-certification/analyze-ticket.md`
+Etapa de análisis contextual con ejecución por olas (waves):
+- **Wave 1 simultánea**: Jira issue + GitHub commits + Postman search + remote links.
+- **Wave 2 condicional**: fallbacks y lecturas secundarias.
 
-## 3) Skills (prompts/habilidades de QA y Xray)
+Produce `CONTEXTO` estructurado con:
+- objetivo, criterios, riesgos,
+- endpoint,
+- lineaDesarrollo/equipo,
+- archivos y tipo detectado,
+- colección/curl,
+- evidencias de Confluence.
 
-Ruta: `skills/qa-xray-certification/`
+#### `skills/qa-xray-certification/review-coverage.md`
+Etapa de evaluación de cobertura existente en Xray.
+- Busca casos reutilizables.
+- Detecta brechas contra el contexto funcional.
+- Decide qué casos rediseñar y cuáles crear nuevos.
 
-Estas habilidades encapsulan pasos del proceso de certificación:
+#### `skills/qa-xray-certification/design-cases.md`
+Etapa de diseño detallado de casos.
+- Diseña únicamente para brechas detectadas.
+- Aplica clasificación de tipo antes de construir pasos.
+- Exige checklists estrictos de consistencia.
+- Entrega tablas completas (sin resumen parcial).
 
-### `qa-xray-certification.md`
-Skill principal del dominio.  
-Define la visión integral del flujo de certificación QA para Xray y cómo se encadenan las sub-habilidades.
-
-### `shared-rules.md`
-Reglas transversales compartidas por todas las skills:
-- Estándares de calidad.
-- Convenciones de redacción.
-- Restricciones/formato de salida.
-- Criterios de consistencia para casos de prueba.
-
-Este archivo evita duplicación de reglas y mantiene uniformidad entre etapas.
-
-### `analyze-ticket.md`
-Etapa de análisis de ticket/requisito:
-- Interpreta alcance funcional.
-- Identifica supuestos, riesgos y dependencias.
-- Extrae criterios que luego se convierten en escenarios de prueba.
-
-Es la base semántica para que los casos diseñados sean relevantes.
-
-### `design-cases.md`
-Etapa de diseño de casos de prueba:
-- Construye casos a partir del análisis previo.
-- Define precondiciones, pasos, datos y resultados esperados.
-- Apunta a formato útil para trazabilidad y posterior carga en Xray.
-
-### `review-coverage.md`
-Etapa de revisión de cobertura:
-- Verifica si los casos cubren escenarios positivos/negativos/borde.
-- Detecta huecos de validación.
-- Propone mejoras antes de cargar a Xray.
-
-Sirve como control de calidad previo a publicación.
-
-### `load-xray.md`
-Etapa de preparación/carga hacia Xray:
-- Ajusta estructura/formatos requeridos por Xray.
-- Estandariza campos para importación.
-- Define pautas para que el resultado final sea cargable y trazable en Jira/Xray.
-
----
-
-## Flujo funcional completo
-
-1. **Input**: ticket o requerimiento (Jira u otra fuente).
-2. **Análisis** (`analyze-ticket.md`): comprensión de alcance y criterios.
-3. **Diseño** (`design-cases.md`): generación de casos de prueba.
-4. **Revisión** (`review-coverage.md` + `shared-rules.md`): validación de cobertura/calidad.
-5. **Preparación de carga** (`load-xray.md`): normalización para Xray.
-6. **Orquestación técnica** (`src/index.ts` + `opencode.json`): ejecución del pipeline end-to-end.
+#### `skills/qa-xray-certification/load-xray.md`
+Etapa de carga/publicación en Xray.
+- Confirma con usuario qué existentes y cuáles nuevos subir.
+- Obtiene `assigneeAccountId`.
+- Ejecuta gate de creación obligatorio.
+- Crea test, transiciona estados y asocia a requirement.
+- Entrega resumen final por caso con estado.
 
 ---
 
-## Cómo mantener este repositorio
+## 4) MCPs usados en el proyecto (completo)
 
-- Mantener reglas globales en `shared-rules.md`.
-- Mantener cada etapa en su skill específica.
-- Evitar lógica duplicada entre skills.
-- Versionar cambios de prompts con mensajes claros de commit.
-- Probar el flujo completo cuando cambie una skill transversal.
+Los MCP están definidos en `opencode.json`:
+
+## 4.1 `jira` MCP
+- **Tipo**: remote
+- **URL**: `https://mcp.atlassian.com/v1/mcp`
+- **Uso**:
+  - leer tarjeta Jira,
+  - obtener transiciones,
+  - transicionar issue,
+  - leer usuario actual,
+  - leer remote links/comentarios (confluence).
+
+## 4.2 `github` MCP
+- **Tipo**: local (`/usr/local/bin/github-mcp-server stdio`)
+- **Auth**: `GITHUB_PERSONAL_ACCESS_TOKEN`
+- **Uso**:
+  - verificar acceso repo,
+  - leer archivos,
+  - listar commits/ramas,
+  - comparar ramas,
+  - buscar código.
+
+## 4.3 `postman` MCP
+- **Tipo**: local (`npx @postman/postman-mcp-server@latest --full`)
+- **Auth**: `POSTMAN_API_KEY`
+- **Uso**:
+  - buscar colecciones,
+  - obtener colección completa,
+  - localizar request por endpoint/path,
+  - extraer method/headers/body para casos BACK.
+
+## 4.4 `xray` MCP (custom de este repo)
+- **Tipo**: local (`node .../mcp-xray/dist/index.js`)
+- **Auth/env**:
+  - `XRAY_CLIENT_ID`, `XRAY_CLIENT_SECRET`
+  - `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`
+- **Uso**:
+  - buscar tests/preconditions,
+  - crear tests manuales,
+  - asociar test ↔ requerimiento,
+  - transicionar estados Jira,
+  - operación compuesta create+load.
+
+## 4.5 `engram` MCP
+- **Tipo**: local (`engram mcp --tools=agent`)
+- **Uso**: soporte de contexto/memoria de agente.
+
+## 4.6 `context7` MCP
+- **Tipo**: remote
+- **URL**: `https://mcp.context7.com/mcp`
+- **Uso**: capacidades auxiliares de contexto/documentación.
 
 ---
 
-## Recomendaciones de mejora (sugeridas)
+## 5) APIs y operaciones incluidas (MCP + endpoints)
 
-- Agregar ejemplos de entrada/salida por cada etapa en `skills/`.
-- Documentar contrato de datos entre fases (JSON schema).
-- Incluir scripts npm para ejecutar validaciones automáticas.
-- Añadir sección de troubleshooting (errores comunes de carga en Xray).
+## 5.1 API Xray (Cloud)
+Base: `https://xray.cloud.getxray.app/api/v2`
+
+### Autenticación
+- `POST /authenticate`
+- Body: `{ client_id, client_secret }`
+- Respuesta: Bearer token (string)
+- Implementación: `getXrayToken()` con caché temporal.
+
+### GraphQL
+- `POST /graphql`
+- Uso principal: `createTest(testType: Manual, steps, jira)`
+- Implementación: `xrayGraphQL()`
+
+### REST de búsqueda
+- `GET /tests?jql=...&limit=...&page=...`
+- `GET /preconditions?jql=...&limit=...`
+- Implementación: `xrayGet()`
+
+## 5.2 API Jira REST
+Base: `JIRA_URL` (default `https://imed.atlassian.net`)
+Auth: Basic (`JIRA_EMAIL:JIRA_API_TOKEN`)
+
+Operaciones usadas por el MCP custom:
+- `GET /rest/api/3/myself`
+- `GET /rest/api/3/issue/{issueKey}/transitions`
+- `POST /rest/api/3/issue/{issueKey}/transitions`
+- `PUT /rest/api/3/issue/{issueKey}` (edición de fields/description)
+- `POST /rest/api/3/issueLink` (asociación test-requirement)
+
+## 5.3 APIs a través de MCP de GitHub/Postman/Jira Atlassian
+Además de lo que implementa `src/index.ts`, los skills invocan tools expuestas por esos MCP (ejemplo):
+- GitHub: `github_get_file_contents`, `github_list_commits`, `github_list_branches`, `github_compare_branches`, `github_search_code`.
+- Postman: `postman_searchPostmanElements`, `postman_getCollection`, `postman_find_request`.
+- Jira/Confluence: `jira_getJiraIssue`, `jira_getJiraIssueRemoteIssueLinks` y búsquedas asociadas.
 
 ---
 
-## Tecnologías y ecosistema
+## 6) Herramientas del MCP custom (`src/index.ts`) y qué hace cada una
 
-- **TypeScript / Node.js**
-- **Opencode** (orquestación de IA y skills por prompts)
-- **Jira + Xray** (gestión y ejecución de QA)
+1. `xray_search_tests`
+   - Busca Tests en Xray con JQL.
+2. `xray_search_preconditions`
+   - Busca Preconditions con JQL.
+3. `xray_create_test`
+   - Crea un test Manual con `summary`, `steps`, `description`, `productos`, `complejidad`, `lineaDesarrollo`, `assigneeAccountId`.
+4. `xray_associate_test`
+   - Crea vínculo Jira tipo `Test` entre requirement y test.
+5. `jira_get_transitions`
+   - Lista transiciones del issue.
+6. `jira_transition_issue`
+   - Ejecuta transición puntual por `transitionId`.
+7. `jira_get_current_user`
+   - Devuelve usuario Jira autenticado (accountId).
+8. `analyze_ticket_context` (tool compuesta)
+   - Ejecuta en paralelo búsqueda de tests/preconditions + usuario actual.
+9. `create_and_load_test` (tool compuesta)
+   - Flujo optimizado: crear test → transición a En curso → (si ready) Manual → asociar a tarjeta.
+
+---
+
+## 7) Explicación completa de cada skill (sin ambigüedades)
+
+## 7.1 Skill `qa-xray-certification` (orquestador)
+**Objetivo**: gobernar el pipeline completo sin saltar etapas.
+
+**Entradas**:
+- `ID_TARJETA`
+- `VALOR_PRODUCTOS`
+- `NOMBRE_REPO` (opcional, con inferencia en casos definidos)
+
+**Proceso**:
+1. valida carga de `shared-rules`.
+2. recupera contexto de memoria (`mem_context`).
+3. ejecuta secuencia hard gate completa.
+4. espera señal de completion de cada skill antes de seguir.
+
+**Salida**:
+- progreso visible por etapa,
+- resultados consolidados al finalizar carga en Xray.
+
+## 7.2 Skill `analyze-ticket`
+**Objetivo**: crear el contexto funcional/técnico base para QA.
+
+**Entradas**: `ID_TARJETA`, `VALOR_PRODUCTOS`, `NOMBRE_REPO`.
+
+**Proceso**:
+- Wave 1 paralela obligatoria: Jira + GitHub + Postman + Confluence links.
+- Wave 2 condicional: fallbacks/búsquedas secundarias.
+- tolerancia a fallos parciales (continúa con avisos).
+
+**Salida estructurada (`CONTEXTO`)**:
+- objetivo, funcionalidad, criterios, riesgos,
+- endpoint,
+- lineaDesarrollo/equipo,
+- archivos detectados y tipo BACK/FRONT/BACK+FRONT,
+- colección/curl,
+- flujos/reglas documentadas.
+
+## 7.3 Skill `review-coverage`
+**Objetivo**: medir qué tan cubierta está la funcionalidad en Xray.
+
+**Entradas**: `CONTEXTO`.
+
+**Proceso**:
+- consulta tests/preconditions existentes,
+- compara contra criterios/riesgos/flujos,
+- clasifica:
+  - reutilizable,
+  - requiere rediseño,
+  - brecha nueva.
+
+**Salida (`COBERTURA`)**:
+- listado de existentes,
+- brechas concretas que alimentan diseño.
+
+## 7.4 Skill `design-cases`
+**Objetivo**: generar casos nuevos estrictamente para cerrar brechas.
+
+**Entradas**: `CONTEXTO + COBERTURA`.
+
+**Proceso**:
+- clasificación obligatoria por tipo de prueba,
+- diseño con formato de pasos correcto según tipo,
+- checklist de consistencia por caso (nombre, description, precondiciones, steps, campos obligatorios).
+
+**Salida (`CASOS`)**:
+- `casosNuevos[]` con:
+  - `nombre`, `tipo`, `description`, `steps[]`, `complejidad`, `lineaDesarrollo`, `productos`.
+- tablas completas visibles y sin omisiones.
+
+## 7.5 Skill `load-xray`
+**Objetivo**: publicar y asociar casos en Xray/Jira de forma controlada.
+
+**Entradas**: `CASOS` + confirmaciones del usuario.
+
+**Proceso**:
+1. pregunta qué casos existentes asociar.
+2. pregunta qué casos nuevos crear/subir.
+3. obtiene accountId usuario.
+4. aplica gate de creación por caso.
+5. ejecuta orden estricto de herramientas (secuencial por caso).
+6. reporta estados finales y advertencias.
+
+**Salida**:
+- resumen de casos asociados/creados,
+- estado final por caso (`Backlog`, `En curso`, `Manual`),
+- advertencias de campos faltantes o transiciones fallidas.
+
+## 7.6 Skill `shared-rules`
+**Objetivo**: imponer consistencia operacional y de salida en toda la certificación.
+
+**Incluye**:
+- reglas de supresión de salida técnica,
+- convenciones de naming y precondiciones,
+- clasificación de tipo de caso,
+- plantillas de pasos BACK y FRONT,
+- inventario de herramientas MCP permitidas.
+
+---
+
+## 8) Flujo end-to-end (trazabilidad completa)
+
+1. Usuario ejecuta `/qa-xray-certification ID PRODUCTOS REPO`.
+2. Orquestador delega al subagente QA.
+3. `analyze-ticket` construye `CONTEXTO` con evidencia Jira/GitHub/Confluence/Postman.
+4. `review-coverage` define brechas reales.
+5. `design-cases` genera casos accionables y compatibles con Xray.
+6. `load-xray` crea/asocia casos y ejecuta transiciones Jira.
+7. Se entrega resumen final por caso con estado y advertencias.
+
+---
+
+## 9) Variables de entorno necesarias
+
+- `XRAY_CLIENT_ID`
+- `XRAY_CLIENT_SECRET`
+- `JIRA_URL` (si no se define, usa `https://imed.atlassian.net`)
+- `JIRA_EMAIL`
+- `JIRA_API_TOKEN`
+- `GITHUB_PERSONAL_ACCESS_TOKEN`
+- `POSTMAN_API_KEY`
+
+---
+
+## 10) Buenas prácticas operativas del repo
+
+- No exponer respuestas crudas de APIs ni credenciales.
+- No saltar etapas del hard gate.
+- No mezclar pasos FRONT con cURL/JSON.
+- No crear casos BACK sin cURL/request válido.
+- Confirmar campos obligatorios antes de crear en Xray (`productos`, `complejidad`, `lineaDesarrollo`, `assignee`).
+
+---
+
+## 11) Referencia complementaria
+
+Se incluye documentación técnica extendida en:
+
+- `docs/arquitectura.md`
+
+con detalle MCP por MCP, APIs y mapping skill ↔ tools ↔ endpoints.
 
 ---
 
 ## Licencia
 
-Este proyecto está bajo licencia **MIT** (ver archivo `LICENSE`).
+MIT (`LICENSE`).
